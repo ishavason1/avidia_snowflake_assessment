@@ -1,0 +1,30 @@
+-- setup/01_create_warehouses.sql
+-- Run as ACCOUNTADMIN
+
+USE ROLE ACCOUNTADMIN;
+
+-- ========================================
+-- 2. CREATE WAREHOUSES
+-- ========================================
+
+-- Transformation warehouse (dbt runs here)
+CREATE WAREHOUSE IF NOT EXISTS TRANSFORM_WH
+  WAREHOUSE_SIZE = XSMALL
+  AUTO_SUSPEND = 60
+  AUTO_RESUME = TRUE
+  COMMENT = 'For dbt transformations and data pipeline';
+
+-- Analytics warehouse (queries here)
+CREATE WAREHOUSE IF NOT EXISTS ANALYTICS_WH
+  WAREHOUSE_SIZE = XSMALL
+  AUTO_SUSPEND = 60
+  AUTO_RESUME = TRUE
+  COMMENT = 'For analyst queries and dashboards';
+
+-- Grant usage to roles
+GRANT USAGE ON WAREHOUSE TRANSFORM_WH TO ROLE DATA_OWNER;
+GRANT USAGE ON WAREHOUSE TRANSFORM_WH TO ROLE SVC_PIPELINE;
+GRANT USAGE ON WAREHOUSE ANALYTICS_WH TO ROLE DEPOSITS_ANALYST;
+GRANT USAGE ON WAREHOUSE ANALYTICS_WH TO ROLE DATA_OWNER;
+
+SHOW WAREHOUSES;

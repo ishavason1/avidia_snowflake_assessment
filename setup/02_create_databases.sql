@@ -1,0 +1,62 @@
+-- setup/02_create_databases.sql
+-- Run as ACCOUNTADMIN
+
+USE ROLE ACCOUNTADMIN;
+
+-- ========================================
+-- 3. CREATE DATABASES & SCHEMAS
+-- ========================================
+
+-- RAW database (ingestion layer)
+CREATE DATABASE IF NOT EXISTS RAW
+  COMMENT = 'Raw banking data from source systems';
+
+CREATE SCHEMA IF NOT EXISTS RAW.PUBLIC
+  COMMENT = 'Raw tables (untracked staging area)';
+
+-- ANALYTICS database (transformed data)
+CREATE DATABASE IF NOT EXISTS ANALYTICS
+  COMMENT = 'Transformed analytics data (STAGING + MARTS layers)';
+
+CREATE SCHEMA IF NOT EXISTS ANALYTICS.STAGING
+  COMMENT = 'Light transformations from RAW (dbt staging models)';
+
+CREATE SCHEMA IF NOT EXISTS ANALYTICS.MARTS
+  COMMENT = 'Certified, business-ready facts and dimensions';
+
+CREATE SCHEMA IF NOT EXISTS ANALYTICS.INTERMEDIATE
+  COMMENT = 'Intermediate models (CTEs, temporary logic)';
+
+-- GOVERNANCE database (metadata & catalog)
+CREATE DATABASE IF NOT EXISTS GOVERNANCE
+  COMMENT = 'Data governance, metadata, quality results, approvals';
+
+CREATE SCHEMA IF NOT EXISTS GOVERNANCE.CATALOG
+  COMMENT = 'Metadata store (dictionary, lineage, glossary)';
+
+CREATE SCHEMA IF NOT EXISTS GOVERNANCE.TAGS
+  COMMENT = 'Tag management (tag assignments, tag hierarchies)';
+
+CREATE SCHEMA IF NOT EXISTS GOVERNANCE.QUALITY
+  COMMENT = 'Data quality results (DQ checks, monitoring)';
+
+CREATE SCHEMA IF NOT EXISTS GOVERNANCE.APPROVALS
+  COMMENT = 'Governance workflows (classification approvals, certifications)';
+
+-- Grant permissions
+GRANT USAGE ON DATABASE RAW TO ROLE DATA_OWNER;
+GRANT USAGE ON DATABASE ANALYTICS TO ROLE DATA_OWNER;
+GRANT USAGE ON DATABASE GOVERNANCE TO ROLE DATA_OWNER;
+
+GRANT USAGE ON SCHEMA RAW.PUBLIC TO ROLE DATA_OWNER;
+GRANT USAGE ON SCHEMA ANALYTICS.STAGING TO ROLE DATA_OWNER;
+GRANT USAGE ON SCHEMA ANALYTICS.MARTS TO ROLE DATA_OWNER;
+GRANT USAGE ON SCHEMA GOVERNANCE.CATALOG TO ROLE DATA_OWNER;
+
+-- Limited access for analysts
+GRANT USAGE ON DATABASE ANALYTICS TO ROLE DEPOSITS_ANALYST;
+GRANT USAGE ON SCHEMA ANALYTICS.MARTS TO ROLE DEPOSITS_ANALYST;
+GRANT SELECT ON ALL TABLES IN SCHEMA ANALYTICS.MARTS TO ROLE DEPOSITS_ANALYST;
+
+SHOW DATABASES;
+SHOW SCHEMAS IN DATABASE ANALYTICS;
