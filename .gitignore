@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Data files (optional - can version control if small)
+# Uncomment if you want to exclude from git:
+# data/*.csv
+# data/*.parquet
+
+# Snowflake
+profiles.yml
+
+# dbt
+target/
+dbt_packages/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
