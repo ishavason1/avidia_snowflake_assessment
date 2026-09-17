@@ -26,3 +26,31 @@ Owned, Defined, Traceable, Trusted, Secure, Adopted, Reconciled
 
 ## Hours Log
 See HOURS.md
+
+## Setup Instructions
+
+### Running Infrastructure Setup
+The infrastructure setup consists of 4 SQL files that must be run **in order**:
+
+```bash
+# Step 1: Create roles
+snow sql -f setup/00_create_roles.sql
+
+# Step 2: Create warehouses
+snow sql -f setup/01_create_warehouses.sql
+
+# Step 3: Create databases
+snow sql -f setup/02_create_databases.sql
+
+# Step 4: Grant permissions
+snow sql -f setup/03_grant_permissions.sql
+```
+
+**Note:** Files are run individually because Snowflake CLI (`snow sql`) does not support the `@` include syntax (that's a Web UI feature). Each file is idempotent and can be re-run safely.
+
+### Verification
+```bash
+snow sql -c default -q "SHOW ROLES;"
+snow sql -c default -q "SHOW WAREHOUSES;"
+snow sql -c default -q "SHOW DATABASES;"
+```
