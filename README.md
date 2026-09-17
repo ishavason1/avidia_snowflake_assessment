@@ -54,3 +54,31 @@ snow sql -c default -q "SHOW ROLES;"
 snow sql -c default -q "SHOW WAREHOUSES;"
 snow sql -c default -q "SHOW DATABASES;"
 ```
+
+## Block 0: Data Foundation ✅ COMPLETE
+
+### What's Built
+- 3,500 customers (seeded, reproducible)
+- 7,039 deposit accounts
+- 50,000 transactions
+- 1,500 loans
+- GL control totals for reconciliation
+- Snowflake infrastructure (5 roles, 2 warehouses, 3 databases)
+
+### Reproducibility
+```bash
+# Rebuild identical data anytime:
+python data/generator.py  # Seed=42, always same output
+
+# Rebuild infrastructure:
+python setup/load_data.py  # Uses ~/.snowflake/config.toml
+```
+
+### Security
+- ✅ No hardcoded credentials (uses config file)
+- ✅ Credentials in .gitignore
+- ✅ All code version-controlled
+- ✅ Sealed sensitive columns baseline (before classification)
+
+### Time Spent
+Block 0: 1:50 hours
