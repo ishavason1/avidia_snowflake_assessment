@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Load CSV files to Snowflake using credentials from ~/.snowflake/config.toml
-NO hardcoded credentials!
+Load CSV files to Snowflake using pandas
+Direct insert - no staging needed!
 """
 
 import snowflake.connector
+from snowflake.connector.pandas_tools import write_pandas
+import pandas as pd
 from pathlib import Path
-import os
 
-# Get credentials from environment or config file
-# snowflake-connector reads ~/.snowflake/config.toml automatically
+# Connect using config file (no hardcoded creds)
 try:
-    conn = snowflake.connector.connect()  # Uses default connection from config
+    conn = snowflake.connector.connect()
 except Exception as e:
-    print(f"✗ Failed to connect. Make sure ~/.snowflake/config.toml exists")
-    print(f"Error: {e}")
+    print(f"✗ Connection failed: {e}")
+    print("Make sure ~/.snowflake/config.toml exists with valid credentials")
     exit(1)
 
 cursor = conn.cursor()
@@ -47,30 +47,35 @@ for csv_file, table_name in files_to_load.items():
     print(f"\n📥 Loading {csv_file} → {table_name}")
     
     try:
-        # Use file:// URL
-        sql = f"""
-        COPY INTO {table_name}
-        FROM 'file://{csv_path.absolute()}'
-        FILE_FORMAT = (
-            TYPE = 'CSV',
-            SKIP_HEADER = 1,
-            FIELD_DELIMITER = ',',
-            NULL_IF = ('NULL', 'null', '')
+        # Read CSV
+        df = pd.read_csv(csv_path)
+        
+        # Write to Snowflake (auto-creates table)
+        success, nchunks, nrows, _ = write_pandas(
+            conn,
+            df,
+            table_name,
+            auto_create_table=True,
+            overwrite=False
         )
-        ON_ERROR = 'CONTINUE'
-        """
         
-        cursor.execute(sql)
-        
-        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-        count = cursor.fetchone()[0]
-        print(f"✓ {table_name}: {count} rows loaded")
+        print(f"✓ {table_name}: {len(df)} rows loaded")
         
     except Exception as e:
-        print(f"✗ Error: {e}")
+        print(f"✗ Error loading {table_name}: {e}")
 
 print("\n" + "=" * 60)
 print("✓ DATA LOAD COMPLETE")
 print("=" * 60)
+
+# Verify row counts
+print("\nVerification:")
+for table_name in files_to_load.values():
+    try:
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+        count = cursor.fetchone()[0]
+        print(f"  {table_name}: {count} rows")
+    except:
+        pass
 
 conn.close()
