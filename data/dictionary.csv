@@ -1,0 +1,43 @@
+table_name,column_name,column_description,data_type,sensitivity_classification,is_cde,notes
+CUSTOMER,CUSTOMER_ID,Unique customer identifier,VARCHAR,PUBLIC,YES,Primary key
+CUSTOMER,FIRST_NAME,Customer first name,VARCHAR,PUBLIC,NO,For persons only
+CUSTOMER,LAST_NAME,Customer last name,VARCHAR,PUBLIC,NO,For persons only
+CUSTOMER,CUSTOMER_TYPE,PERSON or BUSINESS,VARCHAR,PUBLIC,NO,Business logic flag
+CUSTOMER,TAX_ID,Tax ID (SSN or EIN) - SENSITIVE,VARCHAR,PII,YES,Will be masked for analysts
+CUSTOMER,DATE_OF_BIRTH,Date of birth - SENSITIVE,DATE,PII,NO,Age inference risk
+CUSTOMER,EMAIL,Email address - SENSITIVE,VARCHAR,PII,NO,Contact info
+CUSTOMER,PHONE,Phone number - SENSITIVE,VARCHAR,PII,NO,Contact info
+CUSTOMER,ADDRESS,Full mailing address,VARCHAR,PUBLIC,NO,Non-sensitive location
+CUSTOMER,CREATED_AT,Record created timestamp,TIMESTAMP_NTZ,PUBLIC,NO,Audit trail
+ACCOUNT,ACCOUNT_ID,Unique account identifier,VARCHAR,PUBLIC,YES,Primary key
+ACCOUNT,CUSTOMER_ID,Reference to customer,VARCHAR,PUBLIC,NO,Foreign key
+ACCOUNT,ACCOUNT_TYPE,CHECKING/SAVINGS/MONEY_MARKET,VARCHAR,PUBLIC,NO,Business logic
+ACCOUNT,ACCOUNT_NUMBER,10-digit account number - SENSITIVE,VARCHAR,ACCOUNT_DETAILS,YES,Custom classifier detects format
+ACCOUNT,BRANCH_CODE,Branch code (BR_XX),VARCHAR,PUBLIC,NO,For row access policy
+ACCOUNT,BALANCE,Current account balance,DECIMAL,PUBLIC,YES,Reconciles to GL
+ACCOUNT,STATUS,ACTIVE/INACTIVE/CLOSED,VARCHAR,PUBLIC,NO,Lifecycle status
+ACCOUNT,OPENED_DATE,Date account opened,DATE,PUBLIC,NO,Audit trail
+ACCOUNT,CREATED_AT,Record created timestamp,TIMESTAMP_NTZ,PUBLIC,NO,Audit trail
+TRANSACTION,TRANSACTION_ID,Unique transaction identifier,VARCHAR,PUBLIC,YES,Primary key
+TRANSACTION,ACCOUNT_ID,Reference to account,VARCHAR,PUBLIC,NO,Foreign key
+TRANSACTION,TRANSACTION_TYPE,DEPOSIT/WITHDRAWAL/TRANSFER,VARCHAR,PUBLIC,NO,Business logic
+TRANSACTION,AMOUNT,Transaction amount in USD,DECIMAL,PUBLIC,YES,For reconciliation
+TRANSACTION,BUSINESS_DATE,Date transaction occurred,DATE,PUBLIC,NO,For time-series
+TRANSACTION,MEMO,Transaction description,VARCHAR,POTENTIALLY_SENSITIVE,NO,May contain hidden PII
+TRANSACTION,CREATED_AT,Record created timestamp,TIMESTAMP_NTZ,PUBLIC,NO,Audit trail
+LOAN,LOAN_ID,Unique loan identifier,VARCHAR,PUBLIC,YES,Primary key
+LOAN,CUSTOMER_ID,Reference to customer,VARCHAR,PUBLIC,NO,Foreign key
+LOAN,ACCOUNT_ID,Reference to account,VARCHAR,PUBLIC,NO,Foreign key
+LOAN,LOAN_TYPE,PERSONAL/HOME/AUTO/BUSINESS,VARCHAR,PUBLIC,NO,Business logic
+LOAN,PRINCIPAL,Loan principal amount,DECIMAL,PUBLIC,YES,Reconciliation
+LOAN,INTEREST_RATE,Annual interest rate,DECIMAL,PUBLIC,NO,Pricing
+LOAN,CREDIT_GRADE,A/B/C/D credit rating,VARCHAR,PUBLIC,NO,Risk classification
+LOAN,COLLATERAL_VALUE,Value of collateral,DECIMAL,PUBLIC,NO,Risk mitigation
+LOAN,LOAN_MEMO,Loan approval notes,VARCHAR,POTENTIALLY_SENSITIVE,NO,MISLABELED: May contain full card numbers in free text
+LOAN,STATUS,ACTIVE/PAID_OFF/DEFAULTED,VARCHAR,PUBLIC,NO,Lifecycle
+LOAN,ORIGINATION_DATE,Date loan originated,DATE,PUBLIC,NO,Audit trail
+GL_CONTROL,GL_CODE,GL account code,VARCHAR,PUBLIC,NO,Reconciliation reference
+GL_CONTROL,ACCOUNT_TYPE,CHECKING/SAVINGS/MONEY_MARKET,VARCHAR,PUBLIC,NO,Aggregation dimension
+GL_CONTROL,CONTROL_TOTAL,Total balance for account type,DECIMAL,PUBLIC,YES,Reconciliation target
+GL_CONTROL,RECORD_COUNT,Number of accounts,INTEGER,PUBLIC,NO,Volume metric
+GL_CONTROL,AS_OF_DATE,Date of control total,DATE,PUBLIC,NO,Point-in-time snapshot
