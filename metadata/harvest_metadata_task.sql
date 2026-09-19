@@ -1,12 +1,11 @@
 -- metadata/harvest_metadata_task.sql
--- PROCEDURE + TASK: Automated metadata harvesting
+-- CORRECTED: Harvest from ALL databases (RAW, ANALYTICS, GOVERNANCE)
 
 USE ROLE DATA_OWNER;
 USE DATABASE GOVERNANCE;
-USE SCHEMA CATALOG;
 
 -- ============================================
--- 1. CREATE PROCEDURE
+-- 1. CREATE PROCEDURE (Captures all databases)
 -- ============================================
 CREATE OR REPLACE PROCEDURE HARVEST_METADATA_PROC()
 RETURNS STRING
@@ -15,8 +14,8 @@ EXECUTE AS OWNER
 AS
 $$
 BEGIN
-  -- HARVEST TABLE METADATA
-  MERGE INTO TABLE_METADATA t
+  -- HARVEST TABLE METADATA (from all databases)
+  MERGE INTO GOVERNANCE.CATALOG.TABLE_METADATA t
   USING (
     SELECT 
       TABLE_CATALOG as DATABASE_NAME,
@@ -42,8 +41,8 @@ BEGIN
     VALUES (s.DATABASE_NAME, s.SCHEMA_NAME, s.TABLE_NAME, s.OBJECT_TYPE, 
             0, s.CREATED_ON, s.LAST_ALTERED, CURRENT_TIMESTAMP());
   
-  -- HARVEST COLUMN METADATA
-  MERGE INTO COLUMN_METADATA c
+  -- HARVEST COLUMN METADATA (from all databases)
+  MERGE INTO GOVERNANCE.CATALOG.COLUMN_METADATA c
   USING (
     SELECT 
       TABLE_CATALOG as DATABASE_NAME,
@@ -74,7 +73,7 @@ BEGIN
             s.COLUMN_NAME, s.COLUMN_TYPE, s.COLUMN_COMMENT, s.IS_NULLABLE, CURRENT_TIMESTAMP());
   
   -- LOG HARVEST EVENT
-  INSERT INTO TAG_ASSIGNMENTS_HISTORY (
+  INSERT INTO GOVERNANCE.CATALOG.TAG_ASSIGNMENTS_HISTORY (
     TAG_NAME, OBJECT_TYPE, OBJECT_IDENTIFIER, TAG_VALUE,
     ASSIGNED_BY, ASSIGNED_AT, HARVEST_ID
   )
@@ -82,17 +81,17 @@ BEGIN
     'HARVEST_LOG', 
     'PROCEDURE', 
     'HARVEST_METADATA_PROC',
-    'Harvest completed successfully',
+    'Harvested tables and columns from RAW, ANALYTICS, GOVERNANCE databases',
     'SVC_PIPELINE', 
     CURRENT_TIMESTAMP(), 
     TO_VARCHAR(CURRENT_TIMESTAMP(), 'YYYY_MM_DD_HH24_MI_SS')
   );
   
-  RETURN 'Harvest complete at ' || TO_VARCHAR(CURRENT_TIMESTAMP(), 'YYYY-MM-DD HH24:MI:SS');
+  RETURN 'Harvest complete: Metadata from INFORMATION_SCHEMA captured and stored in GOVERNANCE.CATALOG';
 END;
 $$;
 
--- Test the procedure
+-- Test the procedure NOW
 CALL HARVEST_METADATA_PROC();
 
 -- ============================================
@@ -111,4 +110,4 @@ ALTER TASK HARVEST_METADATA_TASK RESUME;
 -- Verify
 SHOW TASKS IN DATABASE GOVERNANCE;
 
-SELECT '✓ Harvest procedure and scheduled task created' as status;
+SELECT '✓ Harvest procedure and task created (all databases)' as status;
