@@ -1,0 +1,139 @@
+version: 2
+
+sources:
+  - name: raw
+    database: RAW
+    schema: PUBLIC
+    description: Raw banking data from source systems
+    
+    tables:
+      - name: customer
+        description: Customer master - persons and businesses
+        columns:
+          - name: CUSTOMER_ID
+            description: Unique customer identifier
+            tests:
+              - unique
+              - not_null
+          - name: FIRST_NAME
+            description: Customer first name
+          - name: LAST_NAME
+            description: Customer last name
+          - name: EMAIL
+            description: Customer email (PII)
+          - name: PHONE
+            description: Customer phone (PII)
+          - name: TAX_ID
+            description: Tax ID (PII - SSN or EIN)
+          - name: DATE_OF_BIRTH
+            description: Date of birth (PII)
+          - name: ADDRESS
+            description: Customer address
+          - name: CUSTOMER_TYPE
+            description: PERSON or BUSINESS
+          - name: CREATED_AT
+            description: Record creation timestamp
+
+      - name: account
+        description: Deposit accounts
+        columns:
+          - name: ACCOUNT_ID
+            description: Unique account identifier
+            tests:
+              - unique
+              - not_null
+          - name: CUSTOMER_ID
+            description: Foreign key to customer
+            tests:
+              - relationships:
+                  to: source('raw', 'customer')
+                  field: CUSTOMER_ID
+          - name: ACCOUNT_NUMBER
+            description: Account number (PII - masked)
+          - name: ACCOUNT_TYPE
+            description: SAVINGS or CHECKING
+          - name: STATUS
+            description: ACTIVE or CLOSED or INACTIVE
+            tests:
+              - accepted_values:
+                  values: ['ACTIVE', 'CLOSED', 'INACTIVE']
+          - name: BALANCE
+            description: Current account balance
+          - name: BRANCH_CODE
+            description: Home branch code
+          - name: OPENED_DATE
+            description: Account open date
+          - name: CREATED_AT
+            description: Record creation timestamp
+
+      - name: transaction
+        description: Banking transactions
+        columns:
+          - name: TRANSACTION_ID
+            description: Unique transaction identifier
+            tests:
+              - unique
+              - not_null
+          - name: ACCOUNT_ID
+            description: Foreign key to account
+            tests:
+              - relationships:
+                  to: source('raw', 'account')
+                  field: ACCOUNT_ID
+          - name: BUSINESS_DATE
+            description: Date of transaction
+          - name: TRANSACTION_TYPE
+            description: DEBIT or CREDIT
+          - name: AMOUNT
+            description: Transaction amount
+          - name: MEMO
+            description: Transaction description (may contain PII)
+          - name: CREATED_AT
+            description: Record creation timestamp
+
+      - name: loan
+        description: Loan products
+        columns:
+          - name: LOAN_ID
+            description: Unique loan identifier
+            tests:
+              - unique
+              - not_null
+          - name: CUSTOMER_ID
+            description: Foreign key to customer
+            tests:
+              - relationships:
+                  to: source('raw', 'customer')
+                  field: CUSTOMER_ID
+          - name: ACCOUNT_ID
+            description: Foreign key to account
+          - name: PRINCIPAL
+            description: Loan principal amount
+          - name: LOAN_TYPE
+            description: PERSONAL, MORTGAGE, or BUSINESS
+          - name: STATUS
+            description: ACTIVE, DEFAULTED, or PAID_OFF
+          - name: INTEREST_RATE
+            description: Annual interest rate
+          - name: ORIGINATION_DATE
+            description: Loan origination date
+          - name: COLLATERAL_VALUE
+            description: Collateral value (may enable inference)
+          - name: CREDIT_GRADE
+            description: A, B, C, D credit grade
+          - name: LOAN_MEMO
+            description: Loan notes (may contain card PANs)
+          - name: CREATED_AT
+            description: Record creation timestamp
+
+      - name: gl_control
+        description: General ledger control totals
+        columns:
+          - name: GL_ACCOUNT
+            description: GL account code
+          - name: GL_DESCRIPTION
+            description: GL account description
+          - name: BALANCE_TOTAL
+            description: Total balance for GL account
+          - name: BUSINESS_DATE
+            description: As-of date

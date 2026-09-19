@@ -1,0 +1,50 @@
+version: 2
+
+tests:
+  - name: test_mart_deposits_completeness
+    description: "COMPLETENESS: account_id must NOT be NULL"
+    tags: ["quality", "mart_deposits"]
+    meta:
+      check_dimension: "COMPLETENESS"
+      target_table: "ANALYTICS.MARTS.MART_DEPOSITS"
+      target_column: "ACCOUNT_ID"
+  
+  - name: test_mart_deposits_uniqueness
+    description: "UNIQUENESS: account_id must be unique (no duplicates)"
+    tags: ["quality", "mart_deposits"]
+    meta:
+      check_dimension: "UNIQUENESS"
+      target_table: "ANALYTICS.MARTS.MART_DEPOSITS"
+      target_column: "ACCOUNT_ID"
+  
+  - name: test_mart_deposits_validity
+    description: "VALIDITY: account_status must be in (ACTIVE, CLOSED, PENDING)"
+    tags: ["quality", "mart_deposits"]
+    meta:
+      check_dimension: "VALIDITY"
+      target_table: "ANALYTICS.MARTS.MART_DEPOSITS"
+      target_column: "ACCOUNT_STATUS"
+  
+  - name: test_mart_deposits_consistency
+    description: "CONSISTENCY: customer_id must reference valid customer (no orphans)"
+    tags: ["quality", "mart_deposits"]
+    meta:
+      check_dimension: "CONSISTENCY"
+      target_table: "ANALYTICS.MARTS.MART_DEPOSITS"
+      target_column: "CUSTOMER_ID"
+  
+  - name: test_mart_deposits_timeliness
+    description: "TIMELINESS: data must be fresh (transaction within 7 days)"
+    tags: ["quality", "mart_deposits"]
+    meta:
+      check_dimension: "TIMELINESS"
+      target_table: "ANALYTICS.MARTS.MART_DEPOSITS"
+      target_column: "LATEST_TRANSACTION_DATE"
+  
+  - name: test_mart_deposits_accuracy
+    description: "ACCURACY: mart balance totals must reconcile to GL within $1"
+    tags: ["quality", "mart_deposits"]
+    meta:
+      check_dimension: "ACCURACY"
+      target_table: "ANALYTICS.MARTS.MART_DEPOSITS"
+      target_column: "CURRENT_BALANCE"
