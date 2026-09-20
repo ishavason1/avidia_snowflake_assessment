@@ -1,0 +1,264 @@
+-- classification/09_create_review_procedures.sql
+-- Steward review workflow for detected classifications.
+--
+-- IMPORTANT:
+-- Detection does NOT directly set the governance CLASSIFICATION tag.
+-- Only explicit steward approval can confirm a classification.
+
+USE ROLE DATA_OWNER;
+USE DATABASE GOVERNANCE;
+USE SCHEMA CATALOG;
+
+-- ============================================================
+-- 1. REVIEW QUEUE
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS CLASSIFICATION_REVIEW_QUEUE (
+    REVIEW_ID VARCHAR PRIMARY KEY,
+
+    DATABASE_NAME VARCHAR NOT NULL,
+    SCHEMA_NAME VARCHAR NOT NULL,
+    TABLE_NAME VARCHAR NOT NULL,
+    COLUMN_NAME VARCHAR NOT NULL,
+
+    DETECTED_SEMANTIC_CATEGORY VARCHAR,
+    DETECTED_PRIVACY_CATEGORY VARCHAR,
+    CLASSIFIER_SOURCE VARCHAR,
+
+    SUGGESTED_CLASSIFICATION VARCHAR,
+    CONFIRMED_CLASSIFICATION VARCHAR,
+
+    REVIEW_STATUS VARCHAR DEFAULT 'PENDING',
+
+    REVIEWED_BY VARCHAR,
+    REVIEWED_AT TIMESTAMP_NTZ,
+    REVIEW_NOTES VARCHAR,
+
+    CREATED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+
+-- ============================================================
+-- 2. LOAD / REFRESH DETECTED CANDIDATES
+-- ============================================================
+--
+-- This uses classifier output only.
+-- It does NOT use SEALED_SENSITIVE_COLUMNS for approval.
+--
+
+MERGE INTO CLASSIFICATION_REVIEW_QUEUE q
+USING (
+
+    SELECT
+        DATABASE_NAME,
+        SCHEMA_NAME,
+        TABLE_NAME,
+        COLUMN_NAME,
+        SEMANTIC_CATEGORY,
+        PRIVACY_CATEGORY,
+        CLASSIFIER_SOURCE,
+
+        CASE
+            -- Custom PAN classifier
+            WHEN SEMANTIC_CATEGORY = 'CARD_PAN'
+                THEN 'ACCOUNT_DETAILS'
+
+            -- Native personal identifiers
+            WHEN SEMANTIC_CATEGORY IN (
+                'EMAIL',
+                'PHONE_NUMBER',
+                'DATE_OF_BIRTH',
+                'NATIONAL_IDENTIFIER',
+                'NAME',
+                'ADDRESS'
+            )
+                THEN 'PII'
+
+            -- Anything else needs steward judgment
+            ELSE NULL
+        END AS SUGGESTED_CLASSIFICATION
+
+    FROM GOVERNANCE.CATALOG.CLASSIFICATION_RESULTS
+
+    WHERE SEMANTIC_CATEGORY IS NOT NULL
+       OR PRIVACY_CATEGORY IS NOT NULL
+
+) s
+
+ON  q.DATABASE_NAME = s.DATABASE_NAME
+AND q.SCHEMA_NAME   = s.SCHEMA_NAME
+AND q.TABLE_NAME    = s.TABLE_NAME
+AND q.COLUMN_NAME   = s.COLUMN_NAME
+
+WHEN MATCHED
+ AND q.REVIEW_STATUS = 'PENDING'
+THEN UPDATE SET
+    q.DETECTED_SEMANTIC_CATEGORY = s.SEMANTIC_CATEGORY,
+    q.DETECTED_PRIVACY_CATEGORY  = s.PRIVACY_CATEGORY,
+    q.CLASSIFIER_SOURCE          = s.CLASSIFIER_SOURCE,
+    q.SUGGESTED_CLASSIFICATION   = s.SUGGESTED_CLASSIFICATION
+
+WHEN NOT MATCHED THEN
+INSERT (
+    REVIEW_ID,
+    DATABASE_NAME,
+    SCHEMA_NAME,
+    TABLE_NAME,
+    COLUMN_NAME,
+    DETECTED_SEMANTIC_CATEGORY,
+    DETECTED_PRIVACY_CATEGORY,
+    CLASSIFIER_SOURCE,
+    SUGGESTED_CLASSIFICATION,
+    REVIEW_STATUS
+)
+VALUES (
+    UUID_STRING(),
+    s.DATABASE_NAME,
+    s.SCHEMA_NAME,
+    s.TABLE_NAME,
+    s.COLUMN_NAME,
+    s.SEMANTIC_CATEGORY,
+    s.PRIVACY_CATEGORY,
+    s.CLASSIFIER_SOURCE,
+    s.SUGGESTED_CLASSIFICATION,
+    'PENDING'
+);
+
+
+-- ============================================================
+-- 3. APPROVE PROCEDURE
+-- ============================================================
+
+CREATE OR REPLACE PROCEDURE APPROVE_CLASSIFICATION(
+    P_REVIEW_ID VARCHAR,
+    P_CONFIRMED_CLASSIFICATION VARCHAR,
+    P_NOTES VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS OWNER
+AS
+$$
+DECLARE
+    V_COUNT INTEGER;
+BEGIN
+
+    SELECT COUNT(*)
+    INTO :V_COUNT
+    FROM GOVERNANCE.CATALOG.CLASSIFICATION_REVIEW_QUEUE
+    WHERE REVIEW_ID = :P_REVIEW_ID
+      AND REVIEW_STATUS = 'PENDING';
+
+    IF (V_COUNT <> 1) THEN
+        RETURN 'Review ID not found or not pending: ' || P_REVIEW_ID;
+    END IF;
+
+    IF (
+        P_CONFIRMED_CLASSIFICATION NOT IN (
+            'PII',
+            'ACCOUNT_DETAILS',
+            'SENSITIVE',
+            'QUASI_IDENTIFIER',
+            'INTERNAL',
+            'PUBLIC'
+        )
+    ) THEN
+        RETURN
+            'Invalid confirmed classification: '
+            || P_CONFIRMED_CLASSIFICATION;
+    END IF;
+
+    UPDATE GOVERNANCE.CATALOG.CLASSIFICATION_REVIEW_QUEUE
+    SET
+        CONFIRMED_CLASSIFICATION = :P_CONFIRMED_CLASSIFICATION,
+        REVIEW_STATUS = 'APPROVED',
+        REVIEWED_BY = CURRENT_USER(),
+        REVIEWED_AT = CURRENT_TIMESTAMP(),
+        REVIEW_NOTES = :P_NOTES
+    WHERE REVIEW_ID = :P_REVIEW_ID
+      AND REVIEW_STATUS = 'PENDING';
+
+    RETURN 'Classification approved for review ID: ' || P_REVIEW_ID;
+
+END;
+$$;
+
+
+-- ============================================================
+-- 4. REJECT PROCEDURE
+-- ============================================================
+
+CREATE OR REPLACE PROCEDURE REJECT_CLASSIFICATION(
+    P_REVIEW_ID VARCHAR,
+    P_NOTES VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS OWNER
+AS
+$$
+DECLARE
+    V_COUNT INTEGER;
+BEGIN
+
+    SELECT COUNT(*)
+    INTO :V_COUNT
+    FROM GOVERNANCE.CATALOG.CLASSIFICATION_REVIEW_QUEUE
+    WHERE REVIEW_ID = :P_REVIEW_ID
+      AND REVIEW_STATUS = 'PENDING';
+
+    IF (V_COUNT <> 1) THEN
+        RETURN 'Review ID not found or not pending: ' || P_REVIEW_ID;
+    END IF;
+
+    UPDATE GOVERNANCE.CATALOG.CLASSIFICATION_REVIEW_QUEUE
+    SET
+        CONFIRMED_CLASSIFICATION = NULL,
+        REVIEW_STATUS = 'REJECTED',
+        REVIEWED_BY = CURRENT_USER(),
+        REVIEWED_AT = CURRENT_TIMESTAMP(),
+        REVIEW_NOTES = :P_NOTES
+    WHERE REVIEW_ID = :P_REVIEW_ID
+      AND REVIEW_STATUS = 'PENDING';
+
+    RETURN 'Classification rejected for review ID: ' || P_REVIEW_ID;
+
+END;
+$$;
+
+
+-- ============================================================
+-- 5. ONLY DATA_STEWARD SHOULD PERFORM REVIEW
+-- ============================================================
+
+GRANT USAGE
+ON PROCEDURE GOVERNANCE.CATALOG.APPROVE_CLASSIFICATION(
+    VARCHAR,
+    VARCHAR,
+    VARCHAR
+)
+TO ROLE DATA_STEWARD;
+
+GRANT USAGE
+ON PROCEDURE GOVERNANCE.CATALOG.REJECT_CLASSIFICATION(
+    VARCHAR,
+    VARCHAR
+)
+TO ROLE DATA_STEWARD;
+
+
+-- ============================================================
+-- 6. REVIEW EVIDENCE
+-- ============================================================
+
+SELECT
+    REVIEW_ID,
+    TABLE_NAME,
+    COLUMN_NAME,
+    DETECTED_SEMANTIC_CATEGORY,
+    DETECTED_PRIVACY_CATEGORY,
+    CLASSIFIER_SOURCE,
+    SUGGESTED_CLASSIFICATION,
+    REVIEW_STATUS
+FROM GOVERNANCE.CATALOG.CLASSIFICATION_REVIEW_QUEUE
+ORDER BY TABLE_NAME, COLUMN_NAME;

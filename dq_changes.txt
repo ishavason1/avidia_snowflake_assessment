@@ -1,0 +1,392 @@
+diff --git a/README.md b/README.md
+index 7cedd97..909a197 100644
+--- a/README.md
++++ b/README.md
+@@ -5,15 +5,14 @@ Complete data catalog and metadata management system on Snowflake Horizon, provi
+ Owned, Defined, Traceable, Trusted, Secure, Adopted, Reconciled
+ 
+ ## Quick Start
+-1. Run `setup/00_FULL_RUN.sql` in Snowflake
+-2. Run Python generator: `python data/generator.py`
+-3. Run dbt: `dbt build`
+-4. Review evidence in `evidence/`
++1. Run the four infrastructure scripts below if needed.
++2. Follow the foundation rebuild commands below to regenerate one complete snapshot and reload RAW.
++3. Use the repository-root dbt project and the scoped foundation commands below.
+ 
+ ## Structure
+ - `setup/` - Infrastructure setup
+ - `data/` - Data generation
+-- `dbt_project/` - Transformations (RAW → STAGING → MARTS)
++- `dbt/models/` - Transformations (RAW → STAGING → MARTS)
+ - `metadata/` - Catalog foundation
+ - `classification/` - PII detection & approval
+ - `protection/` - Masking & row policies
+@@ -55,7 +54,7 @@ snow sql -c default -q "SHOW WAREHOUSES;"
+ snow sql -c default -q "SHOW DATABASES;"
+ ```
+ 
+-## Block 0: Data Foundation ✅ COMPLETE
++## Deposits foundation
+ 
+ ### What's Built
+ - 3,500 customers (seeded, reproducible)
+@@ -65,15 +64,69 @@ snow sql -c default -q "SHOW DATABASES;"
+ - GL control totals for reconciliation
+ - Snowflake infrastructure (5 roles, 2 warehouses, 3 databases)
+ 
+-### Reproducibility
++### Rebuild and validation
++
++Run from the repository root with the project's Python environment activated.
++Random synthetic business values are reproducible from seed 42, while snapshot
++and audit dates may vary by execution; generated files are not byte-identical
++across runs. Regenerate all CSVs together; the previously checked-in CSVs use the
++old transaction/GL contract.
++
++`setup/load_data.py` is the supported rebuild entry point. It uploads the seven
++CSVs and invokes `setup/load_raw.sql`, the single authoritative RAW schema/load
++implementation. Each table is truncated before COPY, so rerunning does not append
++duplicates. Existing tables, grants and policies are retained. CSV quoting is
++handled explicitly and load errors abort instead of silently skipping records.
++The reload is not atomic across tables: after any failure, rerun it successfully
++before dbt. The configured default Snowflake connector connection must be able
++to use DATA_OWNER and TRANSFORM_WH; no credentials are stored in this repository.
++DATA_OWNER needs CREATE STAGE on RAW.PUBLIC (included in the grants script).
++
+ ```bash
+-# Rebuild identical data anytime:
+-python data/generator.py  # Seed=42, always same output
++source venv/bin/activate
++
++# Apply the additional RAW stage privilege once, as ACCOUNTADMIN:
++snow sql -q 'USE ROLE ACCOUNTADMIN; GRANT CREATE STAGE ON SCHEMA RAW.PUBLIC TO ROLE DATA_OWNER;'
+ 
+-# Rebuild infrastructure:
+-python setup/load_data.py  # Uses ~/.snowflake/config.toml
++# Regenerate one complete current snapshot and reload it (replaces table contents):
++python data/generator.py &&
++python setup/load_data.py
++
++# Test RAW contracts first; only continue on success:
++dbt test --select source:raw.account source:raw.customer source:raw.transaction source:raw.gl_control --exclude 'path:dbt/tests/test_mart_deposits_*.sql'
++
++# Build upstream staging, the mart, and its structural/model tests:
++dbt build --select +mart_deposits --exclude 'path:dbt/tests/test_mart_deposits_*.sql'
++
++# Resolve the actual relation names for the validation SQL:
++dbt ls --select mart_deposits stg_transaction --resource-type model --output json --output-keys name relation_name
+ ```
+ 
++The repository-root `dbt_project.yml` is the only project. Its source/model tests,
++foundation empty-mart test, and six existing DQ tests remain discoverable. The
++commands above exclude the six deferred DQ test SQL files from foundation runs.
++Automatic DQ_RESULT persistence is disabled pending review; the macro remains
++unchanged. Existing test-failure storage configuration is retained, so executing
++tests can still store failure tables. The six DQ checks require separate review
++before an unrestricted build is used as assessment evidence.
++
++The mart is a current account snapshot keyed only by ACCOUNT_ID, containing ACTIVE
++CHECKING/SAVINGS accounts. RAW and staged account/customer keys are tested for
++uniqueness; duplicates are not hidden with DISTINCT. Its structural nonempty test
++is separate from the six DQ dimensions. `LATEST_BUSINESS_DATE` is retained for
++compatibility and now means MAX(valid staged transaction BUSINESS_DATE), nullable
++when no dated transaction exists. OPENED_DATE remains independent.
++
++GL controls are separate, one row per eligible ACCOUNT_TYPE and source AS_OF_DATE,
++with balances and counts derived from those same active accounts. No GL fields or
++joins remain in the mart. Reconcile this source snapshot by type in the later DQ
++step; DBT_BUSINESS_DATE is the build date, not proof of source snapshot date.
++
++Run `setup/validate_deposits_foundation.sql` after setting its two relation names
++to the `dbt ls` output. dbt may prefix custom schemas with the target schema.
++The script checks nonempty populations, keys, transaction domains, GL controls,
++and exact eligible-account membership/multiplicity without hardcoded totals.
++
+ ### Security
+ - ✅ No hardcoded credentials (uses config file)
+ - ✅ Credentials in .gitignore
+diff --git a/dbt/tests/test_mart_deposits_accuracy.sql b/dbt/tests/test_mart_deposits_accuracy.sql
+index b69dbf0..c202530 100644
+--- a/dbt/tests/test_mart_deposits_accuracy.sql
++++ b/dbt/tests/test_mart_deposits_accuracy.sql
+@@ -1,19 +1,82 @@
+ -- tests/test_mart_deposits_accuracy.sql
+--- ACCURACY: Mart total deposit balances must reconcile to GL within $1
++-- ACCURACY: one current GL snapshot, reconciled by eligible account type.
++-- Failure unit: one batch-snapshot issue or one failing account-type comparison.
+ 
+-with mart_totals as (
+-  select sum(current_balance) as mart_total_balance
++with expected_types as (
++  select account_type
++  from {{ ref('stg_account') }}
++  where status = 'ACTIVE' and account_type in ('CHECKING', 'SAVINGS')
++  group by account_type
++), mart_totals as (
++  select account_type, count(*) as mart_rows,
++         count(current_balance) as non_null_balances,
++         sum(current_balance) as mart_total_balance
+   from {{ ref('mart_deposits') }}
+-),
+-
+-gl_totals as (
+-  select sum(control_total) as gl_total_deposits
++  group by account_type
++), gl_snapshot as (
++  select count(*) as gl_rows, count(as_of_date) as dated_rows,
++         min(as_of_date) as first_date, max(as_of_date) as last_date
++  from {{ source('raw', 'gl_control') }}
++), gl_totals as (
++  select account_type, count(*) as control_rows,
++         count(gl_code) as non_null_codes,
++         count(control_total) as non_null_totals,
++         count(record_count) as non_null_counts,
++         count(as_of_date) as non_null_dates,
++         min(as_of_date) as control_date,
++         min(control_total) as control_total,
++         min(record_count) as record_count
+   from {{ source('raw', 'gl_control') }}
+-  where account_type = 'DEPOSITS'
++  group by account_type
++), account_types as (
++  select account_type from expected_types
++  union
++  select account_type from mart_totals
++  union
++  select account_type from gl_totals
++), comparisons as (
++  select k.account_type, e.account_type as expected_type,
++         s.first_date as snapshot_date,
++         m.mart_rows, m.non_null_balances, m.mart_total_balance,
++         g.control_rows, g.non_null_codes, g.non_null_totals,
++         g.non_null_counts, g.non_null_dates, g.control_date,
++         g.control_total, g.record_count,
++         abs(m.mart_total_balance - g.control_total) as reconciliation_difference
++  from account_types k
++  left join expected_types e on k.account_type = e.account_type
++  left join mart_totals m on k.account_type = m.account_type
++  left join gl_totals g on k.account_type = g.account_type
++  cross join gl_snapshot s
+ )
++select
++  'INVALID_GL_SNAPSHOT' as failure_reason,
++  cast(null as varchar) as account_type,
++  cast(null as date) as snapshot_date,
++  gl_rows as control_rows,
++  cast(null as number) as mart_rows,
++  cast(null as number) as record_count,
++  cast(null as number(38, 2)) as mart_total_balance,
++  cast(null as number(38, 2)) as control_total,
++  cast(null as number(38, 2)) as reconciliation_difference
++from gl_snapshot
++where gl_rows = 0 or dated_rows <> gl_rows or first_date <> last_date
++
++union all
+ 
+ select
+-  abs(mt.mart_total_balance - gt.gl_total_deposits) as reconciliation_difference
+-from mart_totals mt
+-cross join gl_totals gt
+-where abs(mt.mart_total_balance - gt.gl_total_deposits) > 1.00
+\ No newline at end of file
++  'ACCOUNT_TYPE_RECONCILIATION' as failure_reason,
++  account_type, snapshot_date, control_rows, mart_rows, record_count,
++  mart_total_balance, control_total, reconciliation_difference
++from comparisons
++where account_type is null or expected_type is null
++   or mart_rows is null or control_rows is null
++   or control_rows <> 1
++   or non_null_codes <> control_rows
++   or non_null_totals <> control_rows
++   or non_null_counts <> control_rows
++   or non_null_dates <> control_rows
++   or control_date <> snapshot_date
++   or non_null_balances <> mart_rows
++   or mart_total_balance is null
++   or record_count <> mart_rows
++   or reconciliation_difference > 1.00
+diff --git a/dbt/tests/test_mart_deposits_completeness.sql b/dbt/tests/test_mart_deposits_completeness.sql
+index e497764..812d17d 100644
+--- a/dbt/tests/test_mart_deposits_completeness.sql
++++ b/dbt/tests/test_mart_deposits_completeness.sql
+@@ -2,8 +2,8 @@
+ -- COMPLETENESS: Critical data element (account_id) must NOT be NULL
+ 
+ select
+-  count(*) as failed_rows
++  account_id,
++  customer_id,
++  account_type
+ from {{ ref('mart_deposits') }}
+ where account_id is null
+-
+-having count(*) > 0
+diff --git a/dbt/tests/test_mart_deposits_timeliness.sql b/dbt/tests/test_mart_deposits_timeliness.sql
+index 1b450db..78e2571 100644
+--- a/dbt/tests/test_mart_deposits_timeliness.sql
++++ b/dbt/tests/test_mart_deposits_timeliness.sql
+@@ -1,6 +1,23 @@
+ -- tests/test_mart_deposits_timeliness.sql
+--- TIMELINESS: Data must exist with a business date (not NULL)
++-- TIMELINESS: compare dataset watermarks for the same eligible population.
+ 
+-select account_id, latest_business_date
+-from {{ ref('mart_deposits') }}
+-where latest_business_date is null
+\ No newline at end of file
++with mart_watermark as (
++  select count(*) as mart_rows, max(latest_business_date) as mart_latest_business_date
++  from {{ ref('mart_deposits') }}
++), source_watermark as (
++  select max(t.business_date) as source_latest_business_date
++  from {{ ref('stg_transaction') }} t
++  join {{ ref('stg_account') }} a on t.account_id = a.account_id
++  where a.status = 'ACTIVE'
++    and a.account_type in ('CHECKING', 'SAVINGS')
++)
++select
++  m.mart_rows,
++  m.mart_latest_business_date,
++  s.source_latest_business_date
++from mart_watermark m
++cross join source_watermark s
++where m.mart_rows = 0
++   or s.source_latest_business_date is null
++   or m.mart_latest_business_date is null
++   or m.mart_latest_business_date <> s.source_latest_business_date
+diff --git a/dbt/tests/test_mart_deposits_validity.sql b/dbt/tests/test_mart_deposits_validity.sql
+index 460fd85..a67e3fa 100644
+--- a/dbt/tests/test_mart_deposits_validity.sql
++++ b/dbt/tests/test_mart_deposits_validity.sql
+@@ -1,8 +1,19 @@
+ -- tests/test_mart_deposits_validity.sql
+--- VALIDITY: status must be in valid domain (ACTIVE, CLOSED, INACTIVE)
++-- VALIDITY: validate the generated PERSON/BUSINESS tax-ID format.
++-- Keep the raw tax ID out of stored failure evidence.
+ 
+ select
+   account_id,
+-  status
++  customer_type,
++  case
++    when customer_type is null then 'NULL_CUSTOMER_TYPE'
++    when customer_type not in ('PERSON', 'BUSINESS') then 'UNSUPPORTED_CUSTOMER_TYPE'
++    when tax_id is null then 'NULL_TAX_ID'
++    else 'INVALID_TAX_ID_FORMAT'
++  end as failure_reason
+ from {{ ref('mart_deposits') }}
+-where status not in ('ACTIVE', 'CLOSED', 'INACTIVE')
+\ No newline at end of file
++where customer_type is null
++   or customer_type not in ('PERSON', 'BUSINESS')
++   or tax_id is null
++   or (customer_type = 'PERSON' and not regexp_like(tax_id, '^[0-9]{3}-[0-9]{2}-[0-9]{4}$'))
++   or (customer_type = 'BUSINESS' and not regexp_like(tax_id, '^[0-9]{2}-[0-9]{7}$'))
+diff --git a/dbt/tests/tests_schema.yml b/dbt/tests/tests_schema.yml
+index 12b86f7..338735b 100644
+--- a/dbt/tests/tests_schema.yml
++++ b/dbt/tests/tests_schema.yml
+@@ -2,49 +2,61 @@ version: 2
+ 
+ tests:
+   - name: test_mart_deposits_completeness
+-    description: "COMPLETENESS: account_id must NOT be NULL"
+-    tags: ["quality", "mart_deposits"]
+-    meta:
+-      check_dimension: "COMPLETENESS"
+-      target_table: "ANALYTICS.MARTS.MART_DEPOSITS"
+-      target_column: "ACCOUNT_ID"
+-  
++    description: "COMPLETENESS: return each MART_DEPOSITS record whose ACCOUNT_ID is NULL."
++    config:
++      tags: ["quality", "mart_deposits"]
++      meta:
++        assessment: deposits
++        check_dimension: COMPLETENESS
++        target_column: ACCOUNT_ID
++        failure_unit: MART_ROW
++
+   - name: test_mart_deposits_uniqueness
+-    description: "UNIQUENESS: account_id must be unique (no duplicates)"
+-    tags: ["quality", "mart_deposits"]
+-    meta:
+-      check_dimension: "UNIQUENESS"
+-      target_table: "ANALYTICS.MARTS.MART_DEPOSITS"
+-      target_column: "ACCOUNT_ID"
+-  
++    description: "UNIQUENESS: ACCOUNT_ID must occur once; return one row per duplicated key with its occurrence count."
++    config:
++      tags: ["quality", "mart_deposits"]
++      meta:
++        assessment: deposits
++        check_dimension: UNIQUENESS
++        target_column: ACCOUNT_ID
++        failure_unit: DUPLICATED_KEY
++
+   - name: test_mart_deposits_validity
+-    description: "VALIDITY: account_status must be in (ACTIVE, CLOSED, PENDING)"
+-    tags: ["quality", "mart_deposits"]
+-    meta:
+-      check_dimension: "VALIDITY"
+-      target_table: "ANALYTICS.MARTS.MART_DEPOSITS"
+-      target_column: "ACCOUNT_STATUS"
+-  
++    description: "VALIDITY: PERSON TAX_ID must match ^[0-9]{3}-[0-9]{2}-[0-9]{4}$; BUSINESS must match ^[0-9]{2}-[0-9]{7}$. Reject NULL TAX_ID and NULL/unsupported CUSTOMER_TYPE. Evidence excludes raw TAX_ID."
++    config:
++      tags: ["quality", "mart_deposits"]
++      meta:
++        assessment: deposits
++        check_dimension: VALIDITY
++        target_column: TAX_ID,CUSTOMER_TYPE
++        failure_unit: MART_ROW
++
+   - name: test_mart_deposits_consistency
+-    description: "CONSISTENCY: customer_id must reference valid customer (no orphans)"
+-    tags: ["quality", "mart_deposits"]
+-    meta:
+-      check_dimension: "CONSISTENCY"
+-      target_table: "ANALYTICS.MARTS.MART_DEPOSITS"
+-      target_column: "CUSTOMER_ID"
+-  
++    description: "CONSISTENCY: every MART_DEPOSITS.CUSTOMER_ID must resolve to STG_CUSTOMER; return unmatched account/customer identifiers."
++    config:
++      tags: ["quality", "mart_deposits"]
++      meta:
++        assessment: deposits
++        check_dimension: CONSISTENCY
++        target_column: CUSTOMER_ID
++        failure_unit: MART_ROW
++
+   - name: test_mart_deposits_timeliness
+-    description: "TIMELINESS: data must be fresh (transaction within 7 days)"
+-    tags: ["quality", "mart_deposits"]
+-    meta:
+-      check_dimension: "TIMELINESS"
+-      target_table: "ANALYTICS.MARTS.MART_DEPOSITS"
+-      target_column: "LATEST_TRANSACTION_DATE"
+-  
++    description: "TIMELINESS: dataset MAX(LATEST_BUSINESS_DATE) must equal MAX(STG_TRANSACTION.BUSINESS_DATE) joined independently to ACTIVE CHECKING/SAVINGS STG_ACCOUNT. Fail an empty mart, either NULL watermark, or unequal watermarks. Individual accounts need not transact."
++    config:
++      tags: ["quality", "mart_deposits"]
++      meta:
++        assessment: deposits
++        check_dimension: TIMELINESS
++        target_column: LATEST_BUSINESS_DATE
++        failure_unit: DATASET_COMPARISON
++
+   - name: test_mart_deposits_accuracy
+-    description: "ACCURACY: mart balance totals must reconcile to GL within $1"
+-    tags: ["quality", "mart_deposits"]
+-    meta:
+-      check_dimension: "ACCURACY"
+-      target_table: "ANALYTICS.MARTS.MART_DEPOSITS"
+-      target_column: "CURRENT_BALANCE"
++    description: "ACCURACY: require one common non-null GL AS_OF_DATE and exactly one non-null control per eligible ACTIVE CHECKING/SAVINGS account type. Reject missing/unexpected mart or GL groups, duplicate/null controls and NULL mart balances. Mart count must equal RECORD_COUNT and ABS(SUM(CURRENT_BALANCE)-CONTROL_TOTAL) must be <= 1.00."
++    config:
++      tags: ["quality", "mart_deposits"]
++      meta:
++        assessment: deposits
++        check_dimension: ACCURACY
++        target_column: CURRENT_BALANCE,ACCOUNT_TYPE
++        failure_unit: RECONCILIATION_ISSUE

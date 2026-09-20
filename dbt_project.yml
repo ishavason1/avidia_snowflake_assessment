@@ -1,0 +1,44 @@
+name: 'avidia_snowflake'
+version: '1.0.0'
+config-version: 2
+
+profile: 'avidia'
+
+model-paths: ["dbt/models"]
+test-paths: ["dbt/tests"]
+analysis-paths: ["dbt/analysis"]
+seed-paths: ["dbt/data"]
+macro-paths: ["dbt/macros"]
+snapshot-paths: ["dbt/snapshots"]
+
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  avidia_snowflake:
+    staging:
+      +database: analytics
+      +schema: staging
+      +materialized: table
+    
+    marts:
+      +database: analytics
+      +schema: marts
+      +materialized: table
+
+# Store test failures in GOVERNANCE.CATALOG (no new schema)
+tests:
+  +store_failures: true
+  +schema: catalog
+  +database: governance
+
+# Only the explicitly opted-in DQ test invocation writes measured run results.
+on-run-end:
+  - "{{ populate_dq_result_from_tests(results) }}"
+
+vars:
+  environment: "dev"
+  snowflake_account: "us94895.central-india.azure"
+  snowflake_warehouse: "TRANSFORM_WH"
+  source_database: "RAW"
+  source_schema: "PUBLIC"

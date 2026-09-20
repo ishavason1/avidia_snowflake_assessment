@@ -1,0 +1,39 @@
+version: 2
+
+models:
+  - name: stg_account
+    columns:
+      - name: account_id
+        tests:
+          - unique
+          - not_null
+  - name: stg_customer
+    columns:
+      - name: customer_id
+        tests:
+          - unique
+          - not_null
+  - name: stg_transaction
+    columns:
+      - name: transaction_type
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['DEBIT', 'CREDIT']
+  - name: mart_deposits
+    description: Current snapshot of ACTIVE CHECKING/SAVINGS accounts; one row per ACCOUNT_ID. GL controls are reconciled separately.
+    columns:
+      - name: account_id
+        description: Business key of the current account snapshot; no date component
+        tests:
+          - unique
+          - not_null
+      - name: latest_business_date
+        description: MAX(BUSINESS_DATE) of valid staged transactions per account; nullable, with no OPENED_DATE fallback. Not a load-freshness timestamp.
+      - name: opened_date
+        description: Account opening date from RAW.PUBLIC.ACCOUNT, independent of transaction activity
+      - name: current_balance
+        description: RAW.PUBLIC.ACCOUNT.BALANCE; not derived from transaction amounts
+      - name: dbt_business_date
+        description: Date of dbt execution; not the source snapshot AS_OF_DATE

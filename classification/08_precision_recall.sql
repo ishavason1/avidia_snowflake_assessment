@@ -1,0 +1,158 @@
+-- classification/08_precision_recall.sql
+-- Compare captured classifier detections against the pre-sealed truth set.
+-- The sealed list is used only for evaluation, never for auto-approval.
+
+USE ROLE DATA_OWNER;
+USE DATABASE GOVERNANCE;
+USE SCHEMA CATALOG;
+
+CREATE OR REPLACE VIEW CLASSIFICATION_EVALUATION AS
+
+WITH detected AS (
+
+    SELECT
+        REGEXP_REPLACE(TABLE_NAME, '^STG_', '') AS BASE_TABLE_NAME,
+        COLUMN_NAME,
+        SEMANTIC_CATEGORY,
+        PRIVACY_CATEGORY,
+        CLASSIFIER_SOURCE
+    FROM GOVERNANCE.CATALOG.CLASSIFICATION_RESULTS
+    WHERE SEMANTIC_CATEGORY IS NOT NULL
+       OR PRIVACY_CATEGORY IS NOT NULL
+
+),
+
+truth AS (
+
+    SELECT
+        TABLE_NAME,
+        COLUMN_NAME,
+        EXPECTED_CLASSIFICATION,
+        SOURCE_SECTION,
+        REASON
+    FROM GOVERNANCE.CATALOG.SEALED_SENSITIVE_COLUMNS
+
+),
+
+universe AS (
+
+    SELECT
+        REGEXP_REPLACE(TABLE_NAME, '^STG_', '') AS TABLE_NAME,
+        COLUMN_NAME
+    FROM GOVERNANCE.CATALOG.COLUMN_METADATA
+    WHERE DATABASE_NAME = 'ANALYTICS'
+      AND SCHEMA_NAME = 'STAGING'
+)
+
+SELECT
+    u.TABLE_NAME,
+    u.COLUMN_NAME,
+
+    t.EXPECTED_CLASSIFICATION,
+    t.SOURCE_SECTION,
+
+    d.SEMANTIC_CATEGORY,
+    d.PRIVACY_CATEGORY,
+    d.CLASSIFIER_SOURCE,
+
+    CASE
+        WHEN t.COLUMN_NAME IS NOT NULL THEN TRUE
+        ELSE FALSE
+    END AS ACTUALLY_SENSITIVE,
+
+    CASE
+        WHEN d.COLUMN_NAME IS NOT NULL THEN TRUE
+        ELSE FALSE
+    END AS DETECTED_SENSITIVE,
+
+    CASE
+        WHEN t.COLUMN_NAME IS NOT NULL
+         AND d.COLUMN_NAME IS NOT NULL
+            THEN 'TP'
+
+        WHEN t.COLUMN_NAME IS NULL
+         AND d.COLUMN_NAME IS NOT NULL
+            THEN 'FP'
+
+        WHEN t.COLUMN_NAME IS NOT NULL
+         AND d.COLUMN_NAME IS NULL
+            THEN 'FN'
+
+        ELSE 'TN'
+    END AS OUTCOME,
+
+    t.REASON
+
+FROM universe u
+
+LEFT JOIN truth t
+    ON u.TABLE_NAME = t.TABLE_NAME
+   AND u.COLUMN_NAME = t.COLUMN_NAME
+
+LEFT JOIN detected d
+    ON u.TABLE_NAME = d.BASE_TABLE_NAME
+   AND u.COLUMN_NAME = d.COLUMN_NAME;
+
+
+-- ============================================
+-- PRECISION / RECALL
+-- ============================================
+
+WITH metrics AS (
+
+    SELECT
+        COUNT_IF(OUTCOME = 'TP') AS TP,
+        COUNT_IF(OUTCOME = 'FP') AS FP,
+        COUNT_IF(OUTCOME = 'FN') AS FN,
+        COUNT_IF(OUTCOME = 'TN') AS TN
+    FROM CLASSIFICATION_EVALUATION
+
+)
+
+SELECT
+    TP,
+    FP,
+    FN,
+    TN,
+
+    ROUND(
+        TP::FLOAT / NULLIF(TP + FP, 0),
+        4
+    ) AS PRECISION,
+
+    ROUND(
+        TP::FLOAT / NULLIF(TP + FN, 0),
+        4
+    ) AS RECALL
+
+FROM metrics;
+
+
+-- ============================================
+-- MISSED SENSITIVE COLUMNS
+-- ============================================
+
+SELECT
+    TABLE_NAME,
+    COLUMN_NAME,
+    EXPECTED_CLASSIFICATION,
+    SOURCE_SECTION,
+    REASON
+FROM CLASSIFICATION_EVALUATION
+WHERE OUTCOME = 'FN'
+ORDER BY TABLE_NAME, COLUMN_NAME;
+
+
+-- ============================================
+-- FALSE POSITIVES
+-- ============================================
+
+SELECT
+    TABLE_NAME,
+    COLUMN_NAME,
+    SEMANTIC_CATEGORY,
+    PRIVACY_CATEGORY,
+    CLASSIFIER_SOURCE
+FROM CLASSIFICATION_EVALUATION
+WHERE OUTCOME = 'FP'
+ORDER BY TABLE_NAME, COLUMN_NAME;

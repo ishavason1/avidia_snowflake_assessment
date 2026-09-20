@@ -51,7 +51,11 @@ sources:
           - name: ACCOUNT_NUMBER
             description: Account number (PII - masked)
           - name: ACCOUNT_TYPE
-            description: SAVINGS or CHECKING
+            description: CHECKING, SAVINGS or MONEY_MARKET; mart includes only active CHECKING/SAVINGS
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ['CHECKING', 'SAVINGS', 'MONEY_MARKET']
           - name: STATUS
             description: ACTIVE or CLOSED or INACTIVE
             tests:
@@ -84,6 +88,10 @@ sources:
             description: Date of transaction
           - name: TRANSACTION_TYPE
             description: DEBIT or CREDIT
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ['DEBIT', 'CREDIT']
           - name: AMOUNT
             description: Transaction amount
           - name: MEMO
@@ -127,13 +135,29 @@ sources:
             description: Record creation timestamp
 
       - name: gl_control
-        description: General ledger control totals
+        description: Current synthetic snapshot controls for ACTIVE CHECKING/SAVINGS accounts, by ACCOUNT_TYPE and AS_OF_DATE
         columns:
-          - name: GL_ACCOUNT
+          - name: GL_CODE
             description: GL account code
-          - name: GL_DESCRIPTION
-            description: GL account description
-          - name: BALANCE_TOTAL
-            description: Total balance for GL account
-          - name: BUSINESS_DATE
-            description: As-of date
+            tests:
+              - not_null
+          - name: ACCOUNT_TYPE
+            description: Deposit account type of the eligible population
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ['CHECKING', 'SAVINGS']
+          - name: CONTROL_TOTAL
+            description: Sum of eligible ACCOUNT.BALANCE for this account type
+            tests:
+              - not_null
+          - name: RECORD_COUNT
+            description: Count of eligible ACCOUNT records for this account type
+            tests:
+              - not_null
+          - name: AS_OF_DATE
+            description: Source snapshot generation date, not dbt execution date
+            tests:
+              - not_null
+          - name: _LOAD_TIMESTAMP
+            description: RAW load timestamp populated by the table default

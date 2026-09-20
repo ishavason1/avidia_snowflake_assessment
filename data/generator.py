@@ -4,8 +4,8 @@ data/generator.py
 
 Generate realistic, reproducible banking data for Avidia assessment.
 
-IMPORTANT: Seeded random ensures same data every rebuild.
-Seed = 42 is chosen arbitrarily; same seed = same output.
+Seeded random keeps synthetic choices reproducible. Dates are relative to the
+generation time; regenerate all files together for a new current snapshot.
 
 Run: python data/generator.py
 Output: data/customers.csv, data/accounts.csv, data/transactions.csv, etc.
@@ -21,12 +21,13 @@ import sys
 # ============================================
 # CRITICAL: SEEDED RANDOM FOR REPRODUCIBILITY
 # ============================================
-SEED = 42  # Same seed = same data every rebuild
+SEED = 42  # Reproducible random business values; snapshot/audit dates may vary
 random.seed(SEED)
 Faker.seed(SEED)
 fake = Faker(['en_US'])
 
-print(f"[Generator] Seed={SEED} - Data will be identical on every rebuild")
+snapshot_time = datetime.now()
+print(f"[Generator] Seed={SEED}, snapshot={snapshot_time.date()}")
 
 # ============================================
 # CONFIG
@@ -102,7 +103,7 @@ for cust_idx in range(NUM_CUSTOMERS):
             'BRANCH_CODE': f"BR_{random.randint(1, NUM_BRANCHES):02d}",  # For row access policy test
             'BALANCE': round(random.uniform(100, 500000), 2),
             'STATUS': random.choice(['ACTIVE', 'INACTIVE', 'CLOSED']),
-            'OPENED_DATE': (datetime.now() - timedelta(days=random.randint(30, 1825))).isoformat(),
+            'OPENED_DATE': (snapshot_time - timedelta(days=random.randint(30, 1825))).date().isoformat(),
             'CREATED_AT': datetime.now().isoformat(),
         })
 
@@ -122,9 +123,9 @@ for i in range(NUM_TRANSACTIONS):
     transactions.append({
         'TRANSACTION_ID': f"TXN_{i+1:08d}",
         'ACCOUNT_ID': acct_id,
-        'TRANSACTION_TYPE': random.choice(['DEPOSIT', 'WITHDRAWAL', 'TRANSFER']),
+        'TRANSACTION_TYPE': random.choice(['DEBIT', 'CREDIT']),
         'AMOUNT': round(random.uniform(10, 10000), 2),
-        'BUSINESS_DATE': (datetime.now() - timedelta(days=random.randint(0, 90))).date().isoformat(),
+        'BUSINESS_DATE': (snapshot_time - timedelta(days=random.randint(0, 90))).date().isoformat(),
         'MEMO': fake.sentence(),
         'CREATED_AT': datetime.now().isoformat(),
     })
@@ -152,9 +153,10 @@ for i in range(NUM_LOANS):
         'INTEREST_RATE': round(random.uniform(3.5, 9.5), 2),
         'CREDIT_GRADE': random.choice(['A', 'B', 'C', 'D']),
         'COLLATERAL_VALUE': round(random.uniform(5000, 750000), 2),
-        'LOAN_MEMO': fake.sentence(),  # DELIBERATELY SENSITIVE: May contain hidden card numbers
+        'LOAN_MEMO': ( "Auto-pay card on file: 4532-0151-1283-0366 for synthetic testing only."
+                     if (i + 1) % 20 == 0 else fake.sentence()),  # DELIBERATELY SENSITIVE: May contain hidden card numbers
         'STATUS': random.choice(['ACTIVE', 'PAID_OFF', 'DEFAULTED']),
-        'ORIGINATION_DATE': (datetime.now() - timedelta(days=random.randint(30, 1825))).isoformat(),
+        'ORIGINATION_DATE': (snapshot_time - timedelta(days=random.randint(30, 1825))).date().isoformat(),
     })
 
 loans_df = pd.DataFrame(loans)
@@ -166,10 +168,15 @@ print(f"  ✓ {len(loans_df)} loans")
 # ============================================
 print("[5/6] Generating GL control totals...")
 
-# Sum all balances for reconciliation
-total_deposits = accounts_df['BALANCE'].sum()
-total_deposits_by_type = accounts_df.groupby('ACCOUNT_TYPE')['BALANCE'].sum().reset_index()
-total_deposits_by_type.columns = ['ACCOUNT_TYPE', 'TOTAL_BALANCE']
+# Same population as MART_DEPOSITS; controls remain separate from account rows.
+eligible_deposits = accounts_df[
+    (accounts_df['STATUS'] == 'ACTIVE')
+    & accounts_df['ACCOUNT_TYPE'].isin(['CHECKING', 'SAVINGS'])
+]
+total_deposits_by_type = eligible_deposits.groupby('ACCOUNT_TYPE').agg(
+    CONTROL_TOTAL=('BALANCE', 'sum'),
+    RECORD_COUNT=('ACCOUNT_ID', 'size'),
+).reset_index()
 
 # Create GL control table
 gl_controls = []
@@ -177,9 +184,9 @@ for _, row in total_deposits_by_type.iterrows():
     gl_controls.append({
         'GL_CODE': f"GL_{random.randint(10000, 99999)}",
         'ACCOUNT_TYPE': row['ACCOUNT_TYPE'],
-        'CONTROL_TOTAL': row['TOTAL_BALANCE'],
-        'RECORD_COUNT': len(accounts_df[accounts_df['ACCOUNT_TYPE'] == row['ACCOUNT_TYPE']]),
-        'AS_OF_DATE': datetime.now().date().isoformat(),
+        'CONTROL_TOTAL': round(row['CONTROL_TOTAL'], 2),
+        'RECORD_COUNT': row['RECORD_COUNT'],
+        'AS_OF_DATE': snapshot_time.date().isoformat(),
     })
 
 gl_controls_df = pd.DataFrame(gl_controls)
@@ -233,5 +240,4 @@ print(f"Branches:      {len(branches_df)}")
 print(f"Products:      {len(products_df)}")
 print("="*60)
 print(f"\nAll files saved to: data/")
-print(f"Seed used: {SEED} - Rebuild with same seed for identical data")
-
+print(f"Seed used: {SEED}; snapshot date: {snapshot_time.date()}")

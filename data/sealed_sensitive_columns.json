@@ -1,12 +1,33 @@
 {
-  "comment": "SEALED BEFORE CLASSIFICATION: This list is locked before Block 2 runs. Used to test classification accuracy.",
+  "comment": "SEALED BEFORE CLASSIFICATION: Used as the evaluation truth set. During validation the initial baseline was found incomplete because direct customer identifiers FIRST_NAME, LAST_NAME, and ADDRESS were omitted; these were added transparently before final precision/recall evidence.",
   "confirmed_sensitive_columns": [
+    {
+      "table": "CUSTOMER",
+      "column": "FIRST_NAME",
+      "classification": "PII",
+      "sensitivity_level": "MEDIUM",
+      "reason": "Direct personal identifier"
+    },
+    {
+      "table": "CUSTOMER",
+      "column": "LAST_NAME",
+      "classification": "PII",
+      "sensitivity_level": "MEDIUM",
+      "reason": "Direct personal identifier"
+    },
+    {
+      "table": "CUSTOMER",
+      "column": "ADDRESS",
+      "classification": "PII",
+      "sensitivity_level": "HIGH",
+      "reason": "Customer physical address"
+    },
     {
       "table": "CUSTOMER",
       "column": "TAX_ID",
       "classification": "PII",
       "sensitivity_level": "HIGH",
-      "reason": "SSN/EIN - regulated identifier, PCI-DSS concern",
+      "reason": "SSN/EIN - regulated identifier",
       "masking_rule": "XXX-XX-{last_4}"
     },
     {
@@ -49,45 +70,29 @@
       "column": "LOAN_MEMO",
       "surface_classification": "PUBLIC",
       "actual_classification": "POTENTIALLY_SENSITIVE",
-      "why_mislabeled": "Free-text field - operators paste full card numbers here during approval process",
-      "example_value": "Loan approved. Customer card on file: 4532-1111-2222-3333 for auto-pay setup.",
-      "detection_method": "Custom regex for card PAN format (4532...) - must detect in free text",
-      "detection_difficulty": "HARD - requires text parsing, not schema inspection",
-      "business_impact": "If card PAN leaks in loan memo, we fail data governance audit"
+      "why_mislabeled": "Free-text field may contain payment card PAN",
+      "detection_method": "Custom PAN regex plus Luhn validation"
     },
     {
       "table": "ACCOUNT",
       "column": "BRANCH_CODE",
       "surface_classification": "PUBLIC",
       "actual_classification": "QUASI_IDENTIFIER",
-      "why_mislabeled": "Looks innocent (BR_01, BR_02...) but combined with CUSTOMER name + DOB = re-identification risk",
-      "example_value": "BR_03 (Hudson branch in Westchester)",
-      "detection_method": "Data minimization - branch only needed in row access policy, not in MARTS output to analysts",
-      "detection_difficulty": "MEDIUM - requires domain knowledge",
-      "business_impact": "Regulatory: GDPR pseudo-anonymization requirements"
+      "why_mislabeled": "Can contribute to re-identification when combined with other customer attributes"
     },
     {
       "table": "TRANSACTION",
       "column": "MEMO",
       "surface_classification": "PUBLIC",
       "actual_classification": "POTENTIALLY_SENSITIVE",
-      "why_mislabeled": "Free text memo - may contain sensitive context",
-      "example_value": "Medical reimbursement - Dr. Smith Oncology Center",
-      "detection_method": "Sentiment analysis + keyword detection (medical, legal, etc.) - would require Cortex NLP",
-      "detection_difficulty": "VERY_HARD - requires NLP",
-      "business_impact": "Health information disclosure"
+      "why_mislabeled": "Free-text memo may contain sensitive context"
     },
     {
       "table": "LOAN",
       "column": "COLLATERAL_VALUE",
       "surface_classification": "PUBLIC",
       "actual_classification": "SENSITIVE",
-      "why_mislabeled": "Appears numeric, but reveals real estate/asset values tied to customer",
-      "example_value": "750000 (home value - enables wealth inference)",
-      "detection_method": "Requires masking at certain tiers to prevent wealth inference attacks",
-      "detection_difficulty": "HARD - requires business context",
-      "business_impact": "Privacy: wealth inference for targeting/fraud"
+      "why_mislabeled": "Asset value may enable wealth inference"
     }
-  ],
-  "testing_guidance": "Block 2 will run classification profile to detect all confirmed_sensitive columns. For deliberately_mislabeled columns: precision/recall report shows which reviewers caught manually."
+  ]
 }

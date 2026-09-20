@@ -1,29 +1,18 @@
 #!/usr/bin/env python3
-"""
-Load CSV files to Snowflake using pandas
-Direct insert - no staging needed!
+"""Upload one complete synthetic snapshot and run the canonical SQL RAW reload.
+
+Uses the Snowflake connector's configured default connection. Existing RAW
+tables are truncated, not replaced, so table policies and grants are retained.
 """
 
-import snowflake.connector
-from snowflake.connector.pandas_tools import write_pandas
-import pandas as pd
+import csv
 from pathlib import Path
 
-# Connect using config file (no hardcoded creds)
-try:
-    conn = snowflake.connector.connect()
-except Exception as e:
-    print(f"✗ Connection failed: {e}")
-    print("Make sure ~/.snowflake/config.toml exists with valid credentials")
-    exit(1)
+import snowflake.connector
 
-cursor = conn.cursor()
 
-# Set database/schema
-cursor.execute("USE DATABASE RAW")
-cursor.execute("USE SCHEMA PUBLIC")
-
-files_to_load = {
+ROOT = Path(__file__).resolve().parents[1]
+FILES_TO_LOAD = {
     "customers.csv": "CUSTOMER",
     "accounts.csv": "ACCOUNT",
     "transactions.csv": "TRANSACTION",
@@ -33,49 +22,45 @@ files_to_load = {
     "products.csv": "PRODUCT"
 }
 
-print("=" * 60)
-print("LOADING DATA TO SNOWFLAKE")
-print("=" * 60)
 
-for csv_file, table_name in files_to_load.items():
-    csv_path = Path(f"data/{csv_file}")
-    
-    if not csv_path.exists():
-        print(f"⚠ {csv_file} not found, skipping")
-        continue
-    
-    print(f"\n📥 Loading {csv_file} → {table_name}")
-    
-    try:
-        # Read CSV
-        df = pd.read_csv(csv_path)
-        
-        # Write to Snowflake (auto-creates table)
-        success, nchunks, nrows, _ = write_pandas(
-            conn,
-            df,
-            table_name,
-            auto_create_table=True,
-            overwrite=False
-        )
-        
-        print(f"✓ {table_name}: {len(df)} rows loaded")
-        
-    except Exception as e:
-        print(f"✗ Error loading {table_name}: {e}")
+def main():
+    # Check the entire input set before connecting or truncating any table.
+    expected_counts = {}
+    for filename, table in FILES_TO_LOAD.items():
+        with (ROOT / "data" / filename).open(newline="") as csv_file:
+            reader = csv.DictReader(csv_file)
+            expected_counts[table] = sum(1 for _ in reader)
+        if expected_counts[table] == 0:
+            raise ValueError(f"Empty snapshot input: {filename}")
 
-print("\n" + "=" * 60)
-print("✓ DATA LOAD COMPLETE")
-print("=" * 60)
+    with snowflake.connector.connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("USE ROLE DATA_OWNER")
+            cursor.execute("USE WAREHOUSE TRANSFORM_WH")
+            cursor.execute("CREATE STAGE IF NOT EXISTS RAW.PUBLIC.RAW_DATA_STAGE")
+            for filename in FILES_TO_LOAD:
+                file_uri = (ROOT / "data" / filename).as_uri().replace("'", "''")
+                cursor.execute(
+                    f"PUT '{file_uri}' @RAW.PUBLIC.RAW_DATA_STAGE "
+                    "AUTO_COMPRESS=FALSE OVERWRITE=TRUE"
+                )
+                for result in cursor.fetchall():
+                    if result[6] not in ("UPLOADED", "SKIPPED"):
+                        raise RuntimeError(f"Upload failed for {filename}: {result[6]}")
 
-# Verify row counts
-print("\nVerification:")
-for table_name in files_to_load.values():
-    try:
-        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-        count = cursor.fetchone()[0]
-        print(f"  {table_name}: {count} rows")
-    except:
-        pass
+        # One authoritative schema/load implementation; errors abort the rebuild.
+        with (ROOT / "setup" / "load_raw.sql").open() as sql_file:
+            for cursor in conn.execute_stream(sql_file):
+                cursor.close()
 
-conn.close()
+        with conn.cursor() as cursor:
+            for table, expected in expected_counts.items():
+                cursor.execute(f"SELECT COUNT(*) FROM RAW.PUBLIC.{table}")
+                actual = cursor.fetchone()[0]
+                if actual != expected:
+                    raise RuntimeError(f"{table}: loaded {actual} rows, expected {expected}")
+                print(f"{table}: {actual} rows reloaded")
+
+
+if __name__ == "__main__":
+    main()
