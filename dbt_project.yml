@@ -17,20 +17,19 @@ clean-targets: ["target", "dbt_packages"]
 models:
   avidia_snowflake:
     staging:
-      +database: analytics
-      +schema: staging
-      +materialized: table
-    
-    marts:
-      +database: analytics
-      +schema: marts
+      +database: "{{ env_var('DBT_STAGING_DATABASE', 'ANALYTICS') }}"
+      +schema: "{{ env_var('DBT_STAGING_SCHEMA', 'STAGING') }}"
       +materialized: table
 
-# Store test failures in GOVERNANCE.CATALOG (no new schema)
+    marts:
+      +database: "{{ env_var('DBT_MARTS_DATABASE', 'ANALYTICS') }}"
+      +schema: "{{ env_var('DBT_MARTS_SCHEMA', 'MARTS') }}"
+      +materialized: table
+
 tests:
   +store_failures: true
-  +schema: catalog
-  +database: governance
+  +database: "{{ env_var('DBT_GOVERNANCE_DATABASE', 'GOVERNANCE') }}"
+  +schema: "{{ env_var('DBT_GOVERNANCE_SCHEMA', 'CATALOG') }}"
 
 # Only the explicitly opted-in DQ test invocation writes measured run results.
 on-run-end:

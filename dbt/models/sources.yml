@@ -2,9 +2,8 @@ version: 2
 
 sources:
   - name: raw
-    database: RAW
-    schema: PUBLIC
-    description: Raw banking data from source systems
+    database: "{{ env_var('DBT_RAW_DATABASE', 'RAW') }}"
+    schema: "{{ env_var('DBT_RAW_SCHEMA', 'PUBLIC') }}"
     
     tables:
       - name: customer

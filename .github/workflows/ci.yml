@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      SNOWFLAKE_ROLE: SVC_PIPELINE
+      SNOWFLAKE_WAREHOUSE: TRANSFORM_WH
+      SNOWFLAKE_PRIVATE_KEY_PATH: /tmp/rsa_key.p8
+
+      DBT_DATABASE: CI
+      DBT_SCHEMA: ANALYTICS_STAGING_CI
+
+      DBT_RAW_DATABASE: CI
+      DBT_RAW_SCHEMA: RAW_PUBLIC_CI
+
+      DBT_STAGING_DATABASE: CI
+      DBT_STAGING_SCHEMA: ANALYTICS_STAGING_CI
+
+      DBT_MARTS_DATABASE: CI
+      DBT_MARTS_SCHEMA: ANALYTICS_MARTS_CI
+
+      DBT_GOVERNANCE_DATABASE: CI
+      DBT_GOVERNANCE_SCHEMA: GOVERNANCE_CATALOG_CI
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Snowflake CLI
+        uses: snowflakedb/snowflake-actions@v3
+
+      - name: Create private key file
+        run: |
+          printf '%s' "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > /tmp/rsa_key.p8
+          chmod 600 /tmp/rsa_key.p8
+
+      - name: SQLFluff lint
+        run: |
+          sqlfluff lint dbt/models
+
+      - name: Verify Snowflake service identity
+        env:
+          SNOWFLAKE_AUTHENTICATOR: SNOWFLAKE_JWT
+        run: |
+          snow sql \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --role "$SNOWFLAKE_ROLE" \
+            --warehouse "$SNOWFLAKE_WAREHOUSE" \
+            --authenticator SNOWFLAKE_JWT \
+            --private-key-file "$SNOWFLAKE_PRIVATE_KEY_PATH" \
+            -q "SELECT CURRENT_USER(), CURRENT_ROLE(), CURRENT_WAREHOUSE();"
+
+      - name: Create CI zero-copy clones
+        env:
+          SNOWFLAKE_AUTHENTICATOR: SNOWFLAKE_JWT
+        run: |
+          snow sql \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --role "$SNOWFLAKE_ROLE" \
+            --warehouse "$SNOWFLAKE_WAREHOUSE" \
+            --authenticator SNOWFLAKE_JWT \
+            --private-key-file "$SNOWFLAKE_PRIVATE_KEY_PATH" \
+            -f ci/create_clones.sql
+
+      - name: dbt build
+        run: |
+          dbt build --profiles-dir ci
+
+      - name: Run CI validation
+        env:
+          SNOWFLAKE_AUTHENTICATOR: SNOWFLAKE_JWT
+        run: |
+          snow sql \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --role "$SNOWFLAKE_ROLE" \
+            --warehouse "$SNOWFLAKE_WAREHOUSE" \
+            --authenticator SNOWFLAKE_JWT \
+            --private-key-file "$SNOWFLAKE_PRIVATE_KEY_PATH" \
+            -f ci/validate_ci.sql
+
+      - name: Cleanup CI schemas
+        if: always()
+        env:
+          SNOWFLAKE_AUTHENTICATOR: SNOWFLAKE_JWT
+        run: |
+          snow sql \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --role "$SNOWFLAKE_ROLE" \
+            --warehouse "$SNOWFLAKE_WAREHOUSE" \
+            --authenticator SNOWFLAKE_JWT \
+            --private-key-file "$SNOWFLAKE_PRIVATE_KEY_PATH" \
+            -f ci/drop_clones.sql

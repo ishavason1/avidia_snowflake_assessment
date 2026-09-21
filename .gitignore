@@ -24,3 +24,13 @@ dbt_packages/
 
 # OS
 .DS_Store
+rsa_key.p8
+rsa_key.pub
+
+# Local/generated files
+logs/
+ci/.user.yml
+
+# Local key material
+rsa_key.p8
+rsa_key.pub

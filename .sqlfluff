@@ -1,0 +1,9 @@
+[sqlfluff]
+dialect = snowflake
+templater = jinja
+max_line_length = 120
+
+exclude_rules = LT05
+
+[sqlfluff:templater:jinja]
+apply_dbt_builtins = True
